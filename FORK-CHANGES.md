@@ -2,7 +2,7 @@
 
 This fork keeps upstream's layout and licence (GPL-2.0) and adds the pieces needed to use
 bracket-heat for remote site surveys: deciding, from a desk, whether an address can be served and
-from which access point. Nothing here contains operator data; you supply your own.
+from which access point.
 
 ## Builds on stable Rust
 
