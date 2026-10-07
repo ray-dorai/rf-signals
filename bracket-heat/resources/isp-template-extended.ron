@@ -1,0 +1,52 @@
+// Example using the optional per-AP fields added in this fork. Every tower, AP
+// and coordinate here is made up. The original isp-template.ron still works:
+// all the new fields are optional.
+Wisp(
+    listen_port: 8000,
+    name: "Example Wireless",
+    center: (39.0000, -95.0000),
+    map_zoom: 11,
+    heat_path: "/var/lib/bracket-heat/bheat",
+
+    link_budgets: [
+        LinkBudget(name: "Generic 5 GHz sector + 25 dBi CPE", xmit_eirp: 36.0, receive_gain: 25.0),
+    ],
+
+    towers: [
+        Tower(
+            name: "Example Hill",
+            lat: 39.0100,
+            lon: -95.0200,
+            height_meters: 45.0,
+            max_range_km: 16.0,
+            access_points: [
+                AP(
+                    name: "EXH-Sec1",
+                    equipment_id: Some("1001"),          // stable ID; used by /survey?ap_id=
+                    model: "ePMP 3K Access Point",       // matched by packages.json technologies
+                    height_meters: Some(30.5),           // this AP's height; falls back to the tower's
+                    channel_width_mhz: Some(20.0),
+                    budget_source: "snmp_tx_plus_family_cpe_gain",   // free text, shown in the UI
+                    frequency_ghz: 5.6600,
+                    max_range_km: 8.0,
+                    // With `pattern` set, link_budget EXCLUDES the AP antenna gain:
+                    // transmit power + CPE gain. The pattern supplies the antenna.
+                    link_budget: 41.0,
+                    azimuth: Some(120.0),                // degrees clockwise from true north
+                    downtilt: Some(2.0),
+                    beamwidth: Some(90.0),
+                    pattern: Some("synth-90deg"),        // antenna-patterns/synth-90deg.json
+                ),
+                AP(
+                    name: "EXH-W-1",
+                    model: "Example 60 GHz AP",
+                    frequency_ghz: 66.96,                // the real channel centre: gas loss depends on it
+                    max_range_km: 3.2,
+                    link_budget: 78.0,
+                    azimuth: Some(300.0),
+                    beamwidth: Some(90.0),
+                ),
+            ],
+        ),
+    ],
+)

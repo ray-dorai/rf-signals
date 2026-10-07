@@ -1,5 +1,7 @@
 # RF_Signals
 
+> **This fork** adds remote-survey features (LiDAR clear-shot grades, mount heights, a 57-71 GHz model, antenna patterns, technology and package views) and builds on stable Rust. See [FORK-CHANGES.md](FORK-CHANGES.md).
+
 This is a long-term project for my employer, [iZones](https://izones.net/). They kindly gave me permission to open source a big chunk of our wireless planning software. We're a WISP (Wireless Internet Service Provider), and hope this helps other WISPs to succeed.
 
 This project is divided into three parts:
