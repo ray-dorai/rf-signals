@@ -14,14 +14,16 @@ pub struct Wisp {
     pub link_budgets: Vec<LinkBudget>,
 }
 
-pub fn load_wisp() -> Wisp {
-    let f = File::open("resources/isp.ron").unwrap();
-    let wisp: Wisp = match from_reader(f) {
-        Ok(x) => x,
-        Err(e) => {
-            println!("{:?}", e);
-            panic!("Unable to load WISP definition file. Is it in resources?");
-        }
+/// Load the WISP definition. The path is supplied by the caller rather than
+/// hardcoded to "resources/isp.ron", because three instances share one binary
+/// and each needs its own tower list.
+pub fn load_wisp(path: &str) -> Wisp {
+    let f = match File::open(path) {
+        Ok(f) => f,
+        Err(e) => panic!("Cannot open WISP definition {}: {}", path, e),
     };
-    wisp
+    match from_reader(f) {
+        Ok(w) => w,
+        Err(e) => panic!("Cannot parse WISP definition {}: {:?}", path, e),
+    }
 }

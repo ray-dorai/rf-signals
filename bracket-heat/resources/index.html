@@ -17,8 +17,9 @@
             z-index: 500;
             left: 300px;
             top: 10px;
-            width: 550px;
-            height: 40px;
+            width: max-content;
+            max-width: calc(100% - 720px);
+            min-width: 330px;
             background-color: #eee;
             border: 1px solid black;
             border-radius: 4px;
@@ -26,11 +27,15 @@
         }
 
         #searchBox {
-            left: 80%;
+            right: 60px;
             top: 10px;
-            width: 300px;
             z-index: 500;
             position: absolute;
+            background-color: #eee;
+            border: 1px solid black;
+            border-radius: 4px;
+            padding: 4px;
+            font-size: 10pt;
         }
 
         #ClickInfo {
@@ -72,16 +77,14 @@
         <button id="btnNone">None</button>
         <button id="btnHeight">Height</button>
         <button id="btnClear">Clear Lines/Markers</button>
+        <button id="btnAddresses" title="Show pre-surveyed parcels in view, coloured by grade">Addresses: off</button>
+        <select id="viewTech" style="font-size: 8pt;" title="Limit surveys and the address layer to one AP technology"><option value="">All technologies</option></select>
+        <select id="viewPackage" style="font-size: 8pt;" title="Show only APs that can deliver this service package (rules set by an administrator)"><option value="">Any package</option></select>
+        <a href="/admin" target="_blank" style="font-size: 8pt;" title="Administrators: technologies and service packages">admin</a>
+        <span id="addrStatus" style="font-size: 8pt;"></span>
         <br />
-        <span style="font-weight: bold; font-size: 8pt;">CPE Height (m):</span> <input type="range" min="1" max="20" value="2" class="slider" id="cpeHeight" />
-        <span id="cpeHeightDisplay">2</span>
-        <select id="freq" style="font-size: 8pt;">
-            <option value="60">60 Ghz</option>
-            <option value="5.8">5.8 Ghz</option>
-            <option value="3.6" selected="true">3.6 Ghz</option>
-            <option value="2.4">2.4 Ghz</option>
-        </select>
-        <select id="linkBudget" style="font-size: 8pt;"></select>
+        <span style="font-weight: bold; font-size: 8pt;">CPE Height (m):</span> <input type="range" min="1" max="20" value="4" class="slider" id="cpeHeight" />
+        <span id="cpeHeightDisplay">4</span>
     </div>
 
     <div id="searchBox">
@@ -91,6 +94,16 @@
     <div id="ClickInfo">
         <strong>Current position: <span id="ClickInfoLATLON" style="margin-right: 50px"></span></strong>
         <select id="clickTowerList"></select>
+        <span style="margin-left: 30px; font-size: 9pt;" title="These only change this profile view and its Approx RSSI. Survey results always use each AP's real frequency and budget.">
+            <strong>What-if radio (this profile view only):</strong>
+        <select id="freq" style="font-size: 9pt;">
+            <option value="60">60 Ghz</option>
+            <option value="5.8">5.8 Ghz</option>
+            <option value="3.6" selected="true">3.6 Ghz</option>
+            <option value="2.4">2.4 Ghz</option>
+        </select>
+        <select id="linkBudget" style="font-size: 9pt;"></select>
+        </span>
         <br />
         <div id="losplot" style="width: 100%; height: 95%; overflow-x: scroll; background-color: #555;"></div>
         <div id="pathInfo" style="position: relative; left: 50px; bottom: 150px; height: 50px; width: 200px; background-color: #eee; opacity: 0.8; font-size: 8pt;"></div>
@@ -126,6 +139,7 @@
             loadTowers();
             loadLinkBudgets();
             bindHeight();
+            loadCatalog();
             $("#cpeHeight").change(function() {
                 let h = $("#cpeHeight").val();
                 $("#cpeHeightDisplay").text(h);
@@ -167,18 +181,56 @@
                 $.get("/mapclick/" + pos.lat() + "/" + pos.lng() + "/" + h + "/" + frequency + "/" + lb, (data) => {
                     currentClickInfo = new google.maps.InfoWindow();
                     currentClickInfo.setPosition({ lat: pos.lat(), lng: pos.lng() });
-                    data.towers.sort((a,b) => (a.rssi < b.rssi) ? 1 : -1);
-                    let towerSummary = "<table border='1' cellpadding='2' cellspacing='0'><tr style='font-weight: bold'><td>Tower</td><td>Distance</td><td>RSSI</td><td>Mode</td></tr>";
+                    // Server orders by LiDAR grade, then RSSI. Predicted RSSI alone does
+                    // not separate good addresses from failed installs; the grade does.
+                    const GRADE = {
+                        clear:       ["#c8f7c5", "Clear", "Clear shot from the address over LiDAR trees/buildings. Sell."],
+                        check_mount: ["#fff3b0", "Check mount", "Blocked at the address; clear only from a roof edge, pole or yard spot within 15 m (up to 10 m high). Sell as survey-install and set expectations."],
+                        unverified:  ["#e0e0e0", "No LiDAR", "No cooked LiDAR here: trees and buildings not checked. Survey before promising."],
+                        obstructed:  ["#f8c4c4", "Obstructed", "No clear shot found within 15 m. Needs a technician site survey; do not promise service."]
+                    };
+                    let view = currentView();
+                    let allLinks = data.towers.length;
+                    data.towers = data.towers.filter(l => linkInView(l, view));
+                    let towerSummary = (view.label ? "<div style='font-size: smaller'><strong>View: " + esc(view.label) + "</strong> &ndash; " + (allLinks - data.towers.length) + " other AP(s) hidden" +
+                        (view.pkg ? ". Package rules are administrator-set signal thresholds, not a capacity check." : "") + "</div>" : "") +
+                        "<table border='1' cellpadding='2' cellspacing='0'><tr style='font-weight: bold'><td>Tower</td><td>Technology</td><td>Grade</td><td>Mount needed</td><td>Distance</td><td>RSSI</td><td>Mode</td></tr>";
                     for (var j=0; j<data.towers.length; j++) {
                         let link = data.towers[j];
-                        towerSummary += "<tr>";
+                        let g = GRADE[link.disposition] || ["#ffffff", link.disposition || "?", ""];
+                        let est = (link.rssi_basis === "free_space_estimate" || link.rssi_basis === "vband_channel_unknown") ? " (free-space est.)" : "";
+                        if (link.rssi_basis === "vband_channel_unknown") est = " (free-space est., channel unknown)";
+                        if (link.rain_fade_db != null) {
+                            est += "<br><small>in rain: " + (link.rssi - link.rain_fade_db).toFixed(0) + " dB (" + link.rain_availability_pct + "% of year)</small>";
+                        }
+                        towerSummary += "<tr style='background:" + g[0] + "'>";
                         towerSummary += "<td>" + link.name + "</td>";
+                        towerSummary += "<td>" + esc(techName(catalog.ap_tech[link.name.split(" @")[0]] || "other")) + "</td>";
+                        towerSummary += "<td title='" + g[2] + "'><strong>" + g[1] + "</strong></td>";
+                        // Lowest clear-shot mount from LiDAR: at the address, and the best spot within 15 m.
+                        let mh = "n/a";
+                        if (link.min_mount_agl_m != null) {
+                            let fmt = (m) => (m > 20 ? "&gt;20 m" : m.toFixed(1) + " m (" + (m * 3.281).toFixed(0) + " ft)");
+                            mh = fmt(link.min_mount_agl_m);
+                            if (link.min_mount_nearby_agl_m != null && link.min_mount_nearby_agl_m < link.min_mount_agl_m - 0.5) {
+                                mh += "<br><small>or " + fmt(link.min_mount_nearby_agl_m) + " within 15 m</small>";
+                            }
+                        }
+                        towerSummary += "<td title='Height above ground for a clear shot over LiDAR trees/buildings'>" + mh + "</td>";
                         towerSummary += "<td>" + link.distance_km.toFixed(2) + "km</td>";
-                        towerSummary += "<td>" + link.rssi.toFixed(2) + "dB</td>";
+                        towerSummary += "<td>" + link.rssi.toFixed(2) + "dB" + est + "</td>";
                         towerSummary += "<td>" + link.mode + "</td>";
                         towerSummary += "</tr>";
                     }
                     towerSummary += "</table>";
+                    if (data.towers.length === 0) {
+                        towerSummary += view.label && allLinks > 0
+                            ? "<p><strong>Nothing qualifies for " + esc(view.label) + " here.</strong> " + allLinks + " AP(s) are available in other views.</p>"
+                            : "<p><strong>No AP closes a link here at this mount height.</strong> Not proof of no service: try a taller mount, or book a site survey.</p>";
+                    }
+                    towerSummary += "<p style='font-size:smaller;max-width:34em'>" +
+                        "<b>Clear</b>: sell. <b>Check mount</b>: sell as survey-install. <b>No LiDAR</b> / <b>Obstructed</b>: technician survey before promising. " +
+                        "Grades use LiDAR from the CRM point; trees grow and the point may not be the mount. Hover a grade for detail. Lines to towers use the same colours.</p>";
                     currentClickInfo.setContent(
                         "<strong>Location:</strong>: " + pos.lat().toFixed(4) + ", " + pos.lng().toFixed(4) + "<br />" +
                         "<strong>Ground (SRTM) Altitude</strong>: " + data.base_height_m + " m<br />" +
@@ -193,12 +245,12 @@
                     for (var j=0; j<data.towers.length; j++) {
                         let link = data.towers[j];
                         let tower = towerList[findTower(link.tower)];
-                        if (tower.cpeLine != null) break;
+                        if (tower == null || tower.cpeLine != null) continue;   // server sorts best grade first
                         let path = [ { lat: pos.lat(), lng: pos.lng() }, { lat: link.lat, lng: link.lon } ];
                         tower.cpeLine = new google.maps.Polyline({
                             path: path,
                             geodesic: true,
-                            strokeColor: color_ramp(link.rssi),
+                            strokeColor: grade_color(link.disposition, link.rssi),
                             strokeOpacity: 1.0,
                             strokeWeight: 4,
                         });
@@ -206,7 +258,7 @@
                         google.maps.event.addListener(tower.cpeLine, 'mouseover', (e) => {
                             tower.lineWindow = new google.maps.InfoWindow();
                             tower.lineWindow.setPosition(e.latLng);
-                            tower.lineWindow.setContent("<strong>Path to " + link.name + "</strong><br /><strong>Estimated RSSI:</strong> " + link.rssi.toFixed(1) + "<br /><strong>Distance:</strong> " + link.distance_km.toFixed(1) + " km<br /><strong>Mode</strong>: " + link.mode);
+                            tower.lineWindow.setContent("<strong>Path to " + link.name + "</strong><br /><strong>Grade:</strong> " + ((GRADE[link.disposition] || [null, link.disposition || "?"])[1]) + (link.min_mount_agl_m != null ? " (mount " + (link.min_mount_agl_m > 20 ? "&gt;20" : link.min_mount_agl_m.toFixed(1)) + " m)" : "") + "<br /><strong>Estimated RSSI:</strong> " + link.rssi.toFixed(1) + "<br /><strong>Distance:</strong> " + link.distance_km.toFixed(1) + " km<br /><strong>Mode</strong>: " + link.mode);
                             tower.lineWindow.open(map);
                         });
                         google.maps.event.addListener(tower.cpeLine, 'mouseout', (e) => {
@@ -279,6 +331,8 @@
                     data[i].cpeLine = null;
                     data[i].lineWindow = null;
                     data[i].id = i;
+                    let tw = data[i];
+                    data[i].marker.addListener("click", () => showTower(tw));
                 }
                 towerList = data;
             });
@@ -305,6 +359,12 @@
                 removeCurrentOverlay();
             });
             $("#btnClear").click(clear_lines);
+            $("#btnAddresses").click(function() {
+                addressLayerOn = !addressLayerOn;
+                $("#btnAddresses").text("Addresses: " + (addressLayerOn ? "on" : "off"));
+                if (addressLayerOn) { refreshAddresses(); } else { clearAddresses(); $("#addrStatus").text(""); }
+            });
+            map.addListener("idle", () => { if (addressLayerOn) refreshAddresses(); });
             $("#btnHeight").click(function() {
                 removeCurrentOverlay();
                 let bounds = map.getBounds();
@@ -578,6 +638,122 @@
 
         function deg2rad(deg) {
             return deg * (Math.PI/180)
+        }
+
+        // ---- Catalog: technologies and service packages (see /catalog, /admin) ----
+        let catalog = { technologies: [], packages: [], ap_tech: {} };
+        function techName(id) {
+            let t = catalog.technologies.find(t => t.id === id);
+            return t ? t.name : (id === "other" ? "Other" : (id || ""));
+        }
+        function loadCatalog() {
+            $.get("/catalog", (c) => {
+                catalog = c;
+                for (let t of c.technologies) {
+                    if (c.ap_counts[t.id]) $("#viewTech").append($("<option>").val(t.id).text(t.name + " (" + c.ap_counts[t.id] + " APs)"));
+                }
+                if (c.ap_counts["other"]) $("#viewTech").append($("<option>").val("other").text("Other (" + c.ap_counts["other"] + " APs)"));
+                for (let p of c.packages) {
+                    if (p.rules.length) $("#viewPackage").append($("<option>").val(p.id).text(p.name));
+                }
+                if (!c.packages.length) $("#viewPackage").hide();
+            });
+            $("#viewTech, #viewPackage").change(() => { if (addressLayerOn) refreshAddresses(); });
+        }
+        function currentView() {
+            let tech = $("#viewTech").val() || "", pkgId = $("#viewPackage").val() || "";
+            let pkg = catalog.packages.find(p => p.id === pkgId) || null;
+            let label = [tech ? techName(tech) : "", pkg ? pkg.name : ""].filter(x => x).join(", ");
+            return { tech: tech, pkg: pkg, label: label };
+        }
+        // Does this survey link belong in the current view? Same rule the server applies to the address layer.
+        function linkInView(link, view) {
+            let key = link.name.split(" @")[0];
+            let tech = catalog.ap_tech[key] || "other";
+            if (view.tech && tech !== view.tech) return false;
+            if (view.pkg) {
+                return view.pkg.rules.some(r => r.tech === tech && link.rssi >= r.min_rssi_dbm && (r.max_km == null || link.distance_km <= r.max_km));
+            }
+            return true;
+        }
+        function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+        // Tower click: every AP on it with the inputs the planner is using.
+        let towerWindow = null;
+        function showTower(t) {
+            if (towerWindow) towerWindow.close();
+            let num = (v, d, unit) => (v == null ? "&ndash;" : Number(v).toFixed(d) + (unit || ""));
+            let aps = t.access_points.slice().sort((a, b) => (a.azimuth == null ? 999 : a.azimuth) - (b.azimuth == null ? 999 : b.azimuth) || a.name.localeCompare(b.name));
+            let h = "<div style='max-height: 420px; overflow: auto; font-size: 9pt;'><strong>" + esc(t.name) + "</strong> &nbsp; " + t.lat.toFixed(5) + ", " + t.lon.toFixed(5) +
+                " &nbsp; " + aps.length + " APs<table border='1' cellpadding='2' cellspacing='0' style='margin-top: 4px; white-space: nowrap;'>" +
+                "<tr style='font-weight: bold'><td>AP</td><td>Technology</td><td>Model</td><td>Freq (MHz)</td><td>Width</td><td>Height</td><td>Azimuth</td><td>Tilt</td><td>Beam</td><td>Range cap</td><td>Budget (dB)</td><td>Antenna pattern</td><td>ID</td></tr>";
+            for (let a of aps) {
+                let ht = a.height_meters != null ? a.height_meters : t.height_meters;
+                h += "<tr><td>" + esc(a.name) + "</td><td>" + esc(techName(catalog.ap_tech[t.name + ":" + a.name] || "")) + "</td><td>" + esc(a.model || "") + "</td>" +
+                    "<td>" + (a.frequency_ghz * 1000).toFixed(0) + "</td><td>" + (a.channel_width_mhz != null ? a.channel_width_mhz.toFixed(0) + " MHz" : "&ndash;") + "</td>" +
+                    "<td title='" + (a.height_meters != null ? "AP inventory height (unverified)" : "tower height used; no AP height on record") + "'>" + ht.toFixed(1) + " m (" + (ht * 3.281).toFixed(0) + " ft)" + (a.height_meters != null ? "" : " *") + "</td>" +
+                    "<td>" + num(a.azimuth, 0, "&deg;") + "</td><td>" + num(a.downtilt, 1, "&deg;") + "</td><td>" + num(a.beamwidth, 0, "&deg;") + "</td>" +
+                    "<td>" + a.max_range_km.toFixed(1) + " km (" + (a.max_range_km / 1.609).toFixed(1) + " mi)</td>" +
+                    "<td title='" + esc(a.budget_source || "") + "'>" + a.link_budget.toFixed(0) + (a.budget_source && a.budget_source.indexOf("snmp") === 0 ? "" : " *") + "</td>" +
+                    "<td>" + esc(a.pattern || "none (omni)") + "</td><td>" + esc(a.equipment_id || "") + "</td></tr>";
+            }
+            h += "</table><div style='font-size: 8pt; margin-top: 3px;'>Frequency, width and transmit power come from SNMP where available; height, azimuth and tilt are inventory records. " +
+                "* = assumed (tower height, or a family link budget rather than SNMP power).</div></div>";
+            towerWindow = new google.maps.InfoWindow({ content: h, maxWidth: 1100 });
+            towerWindow.setPosition({ lat: t.lat, lng: t.lon });
+            towerWindow.open(map);
+        }
+
+        // ---- Pre-surveyed address layer (parcels graded offline; see /addresses) ----
+        let addressLayerOn = false;
+        let addressMarkers = [];
+        let addressRequest = 0;
+        function clearAddresses() {
+            for (let m of addressMarkers) m.setMap(null);
+            addressMarkers = [];
+        }
+        function refreshAddresses() {
+            let b = map.getBounds();
+            if (!b) return;
+            let sw = b.getSouthWest(), ne = b.getNorthEast();
+            let mine = ++addressRequest;
+            let view = currentView();
+            let qs = (view.tech ? "tech=" + encodeURIComponent(view.tech) : "") + (view.pkg ? (view.tech ? "&" : "") + "package=" + encodeURIComponent(view.pkg.id) : "");
+            let vlabel = view.label ? " for " + view.label : "";
+            $.get("/addresses/" + sw.lat() + "/" + sw.lng() + "/" + ne.lat() + "/" + ne.lng() + (qs ? "?" + qs : ""), (d) => {
+                if (mine !== addressRequest || !addressLayerOn) return;   // a newer view superseded this one
+                clearAddresses();
+                let g = d.by_grade || {};
+                let counts = ["clear", "check_mount", "unverified", "obstructed", "none"].filter(k => g[k]).map(k => g[k] + " " + k.replace("_", " ")).join(", ");
+                if (!d.total) { $("#addrStatus").text("no address layer published for this network"); return; }
+                if (d.truncated) { $("#addrStatus").text(d.in_view.toLocaleString() + " addresses in view" + vlabel + " (" + counts + ") - zoom in to draw them"); return; }
+                $("#addrStatus").text(d.in_view.toLocaleString() + " addresses" + vlabel + ": " + counts + (d.meta && d.meta.generated ? " | surveyed " + d.meta.generated + " at " + d.meta.cpe_height_m + " m" : ""));
+                // columns: lat, lon, grade, mount_m, lowest_mount_m, rssi, best_ap, aps, wave, address, id, on_building
+                for (let r of d.rows) {
+                    let none = r[2] === "none";
+                    let tip = (r[9] || r[10]) + "\n" + (none ? (view.label ? "Not available for " + view.label : "No AP closes a link at " + d.meta.cpe_height_m + " m") :
+                        (r[2].replace("_", " ") + (r[4] != null ? ", lowest mount " + (r[4] > 20 ? ">20" : r[4]) + " m" : "") + "\nstrongest: " + r[6] + (r[12] ? " [" + techName(r[12]) + "]" : "") + " " + r[5] + " dB (" + r[7] + " APs" + (r[8] ? ", Wave possible" : "") + ")")) +
+                        (r[11] ? "" : "\n(point is the parcel centre, not a building)") + "\nClick to run the live survey here";
+                    let m = new google.maps.Marker({
+                        position: { lat: r[0], lng: r[1] }, map: map, title: tip, zIndex: 1,
+                        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 5, fillColor: none ? "#222222" : grade_color(r[2], -70),
+                                fillOpacity: 0.9, strokeColor: r[11] ? "#000000" : "#ffffff", strokeWeight: 1 }
+                    });
+                    m.addListener("click", () => google.maps.event.trigger(map, "click", { latLng: m.getPosition() }));
+                    addressMarkers.push(m);
+                }
+            });
+        }
+
+        // Line colour follows the LiDAR grade, not raw signal: predicted RSSI alone
+        // does not separate good addresses from failed installs.
+        function grade_color(disposition, rssi) {
+            switch (disposition) {
+                case "clear": return "#00C800";
+                case "check_mount": return "#FFD000";
+                case "unverified": return "#9E9E9E";
+                case "obstructed": return "#E53935";
+            }
+            return color_ramp(rssi);
         }
 
         function color_ramp(rssi) {

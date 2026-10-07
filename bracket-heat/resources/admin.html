@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Planner admin - technologies and service packages</title>
+    <style>
+        body { font-family: Arial, Helvetica, sans-serif; font-size: 10pt; margin: 16px; max-width: 1250px; }
+        h2 { margin-bottom: 4px; }
+        table { border-collapse: collapse; margin: 6px 0 10px 0; }
+        td, th { border: 1px solid #999; padding: 3px 5px; vertical-align: middle; }
+        th { background: #eee; text-align: left; }
+        input[type=text] { width: 150px; }
+        input.id { width: 90px; }
+        input.num { width: 58px; }
+        input.models { width: 230px; }
+        .off input.num { background: #eee; color: #999; }
+        .note { color: #555; font-size: 9pt; max-width: 900px; }
+        .bar { background: #eef; border: 1px solid #99c; padding: 8px; margin: 10px 0; }
+        .err { color: #b00; font-weight: bold; }
+        .ok { color: #070; font-weight: bold; }
+        button { margin-right: 4px; }
+        .pkg { border: 1px solid #999; padding: 6px; margin: 8px 0; background: #fafafa; }
+    </style>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+</head>
+<body>
+    <h2>_ISP_NAME_ &ndash; technologies and service packages</h2>
+    <p class="note">
+        Salespeople pick a technology or a package on the map, and the survey and the address layer show only APs that qualify.
+        A package qualifies at an address when an AP of an allowed technology is predicted at or above that technology's minimum
+        signal (and within its maximum range, if set). <strong>These are your rules.</strong> The planner predicts signal and line of
+        sight; it does not measure throughput or sector capacity.
+    </p>
+    <div class="bar">
+        Administrator password: <input type="password" id="pw" style="width: 200px">
+        <button id="check">Check</button> <span id="pwmsg"></span>
+        <div id="disabled" class="err" style="display: none; margin-top: 6px;">
+            Editing is switched off on this server. Set BRACKET_HEAT_ADMIN_PASSWORD (8+ characters) in the server's environment and restart it.
+        </div>
+    </div>
+
+    <h3>Technologies</h3>
+    <p class="note">
+        An AP belongs to the <strong>first</strong> row it matches, top to bottom: its model must contain one of the listed words
+        (leave empty to match any model) and its frequency must fall in the band (leave empty for no limit). Put specific rows above
+        catch-alls. APs matching nothing appear as &ldquo;Other&rdquo;.
+    </p>
+    <table id="techs"><thead><tr><th></th><th>ID</th><th>Name shown to sales</th><th>Model contains (comma separated)</th><th>Min GHz</th><th>Max GHz</th><th>APs now</th><th></th></tr></thead><tbody></tbody></table>
+    <button id="addTech">Add technology</button>
+
+    <h3>Service packages</h3>
+    <p class="note">Tick the technologies allowed to deliver each package and set the minimum predicted signal for each. Leave max range empty for no limit.</p>
+    <div id="pkgs"></div>
+    <button id="addPkg">Add package</button>
+
+    <div class="bar">
+        <button id="save" style="font-weight: bold;">Save</button> <button id="reload">Discard changes</button> <span id="msg"></span>
+        <div class="note" id="catnote" style="margin-top: 6px;"></div>
+    </div>
+
+<script>
+let cat = null, counts = {};
+const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const numOrNull = v => { v = String(v).trim(); if (v === "") return null; let n = Number(v); return isFinite(n) ? n : NaN; };
+
+function load() {
+    $.get("/catalog", c => {
+        cat = { technologies: c.technologies, packages: c.packages, note: c.note || "" };
+        counts = c.ap_counts || {};
+        $("#disabled").toggle(!c.admin_enabled);
+        $("#catnote").text(cat.note);
+        render();
+        $("#msg").text("");
+    });
+}
+
+function render() {
+    let tb = $("#techs tbody").empty();
+    cat.technologies.forEach((t, i) => {
+        tb.append("<tr data-i='" + i + "'><td><button class='up' title='Move up'>&uarr;</button><button class='down' title='Move down'>&darr;</button></td>" +
+            "<td><input class='id t-id' type='text' value='" + esc(t.id) + "'></td><td><input class='t-name' type='text' value='" + esc(t.name) + "'></td>" +
+            "<td><input class='models t-models' type='text' value='" + esc((t.model_contains || []).join(", ")) + "'></td>" +
+            "<td><input class='num t-min' type='text' value='" + (t.min_ghz == null ? "" : t.min_ghz) + "'></td><td><input class='num t-max' type='text' value='" + (t.max_ghz == null ? "" : t.max_ghz) + "'></td>" +
+            "<td>" + (counts[t.id] || 0) + "</td><td><button class='delTech'>Remove</button></td></tr>");
+    });
+    let box = $("#pkgs").empty();
+    cat.packages.forEach((p, i) => {
+        let h = "<div class='pkg' data-i='" + i + "'>ID <input class='id p-id' type='text' value='" + esc(p.id) + "'> Name <input class='p-name' type='text' value='" + esc(p.name) + "'> " +
+            "Down <input class='num p-down' type='text' value='" + p.down_mbps + "'> Up <input class='num p-up' type='text' value='" + p.up_mbps + "'> Mbps " +
+            "<button class='delPkg'>Remove package</button><table><tr><th>Allowed</th><th>Technology</th><th>Min signal (dBm)</th><th>Max range (km)</th></tr>";
+        cat.technologies.concat([{ id: "other", name: "Other (unmatched APs)" }]).forEach(t => {
+            let r = (p.rules || []).find(r => r.tech === t.id);
+            h += "<tr class='rule " + (r ? "" : "off") + "' data-tech='" + esc(t.id) + "'><td><input type='checkbox' class='r-on' " + (r ? "checked" : "") + "></td><td>" + esc(t.name) + "</td>" +
+                "<td><input class='num r-rssi' type='text' value='" + (r ? r.min_rssi_dbm : "") + "' placeholder='-70'></td>" +
+                "<td><input class='num r-km' type='text' value='" + (r && r.max_km != null ? r.max_km : "") + "'></td></tr>";
+        });
+        box.append(h + "</table></div>");
+    });
+}
+
+// Read the form back into `cat`; returns an error string or null.
+function collect() {
+    let techs = [], err = null;
+    $("#techs tbody tr").each(function () {
+        let r = $(this), mn = numOrNull(r.find(".t-min").val()), mx = numOrNull(r.find(".t-max").val());
+        if (Number.isNaN(mn) || Number.isNaN(mx)) err = "Technology band limits must be numbers or empty.";
+        techs.push({ id: r.find(".t-id").val().trim(), name: r.find(".t-name").val().trim(),
+            model_contains: r.find(".t-models").val().split(",").map(x => x.trim()).filter(x => x), min_ghz: mn, max_ghz: mx });
+    });
+    let pkgs = [];
+    $("#pkgs .pkg").each(function () {
+        let b = $(this), rules = [];
+        b.find("tr.rule").each(function () {
+            let r = $(this);
+            if (!r.find(".r-on").prop("checked")) return;
+            let rssi = numOrNull(r.find(".r-rssi").val()), km = numOrNull(r.find(".r-km").val());
+            if (rssi === null || Number.isNaN(rssi)) err = "Package " + b.find(".p-id").val() + ": every ticked technology needs a minimum signal.";
+            if (Number.isNaN(km)) err = "Package " + b.find(".p-id").val() + ": max range must be a number or empty.";
+            rules.push({ tech: r.data("tech"), min_rssi_dbm: rssi, max_km: km });
+        });
+        let d = Number(b.find(".p-down").val()), u = Number(b.find(".p-up").val());
+        if (!isFinite(d) || !isFinite(u)) err = "Package " + b.find(".p-id").val() + ": speeds must be numbers.";
+        pkgs.push({ id: b.find(".p-id").val().trim(), name: b.find(".p-name").val().trim(), down_mbps: d, up_mbps: u, rules: rules });
+    });
+    cat.technologies = techs; cat.packages = pkgs;
+    return err;
+}
+
+function headers() { return { "X-Admin-Password": $("#pw").val() }; }
+
+$(function () {
+    $("#pw").val(sessionStorage.getItem("plannerAdminPw") || "");
+    load();
+    $("#check").click(() => {
+        $.ajax({ url: "/admin/check", headers: headers() })
+            .done(() => { sessionStorage.setItem("plannerAdminPw", $("#pw").val()); $("#pwmsg").attr("class", "ok").text("Password accepted."); })
+            .fail(x => $("#pwmsg").attr("class", "err").text(x.status === 403 ? "Editing is switched off on this server." : "Wrong password."));
+    });
+    $("#reload").click(load);
+    $("#addTech").click(() => { collect(); cat.technologies.push({ id: "new-tech", name: "New technology", model_contains: [], min_ghz: null, max_ghz: null }); render(); });
+    $("#addPkg").click(() => { collect(); cat.packages.push({ id: "new-package", name: "New package", down_mbps: 0, up_mbps: 0, rules: [] }); render(); });
+    $(document).on("click", ".delTech", function () { collect(); cat.technologies.splice($(this).closest("tr").data("i"), 1); render(); });
+    $(document).on("click", ".delPkg", function () { collect(); cat.packages.splice($(this).closest(".pkg").data("i"), 1); render(); });
+    $(document).on("click", ".up, .down", function () {
+        collect();
+        let i = $(this).closest("tr").data("i"), j = i + ($(this).hasClass("up") ? -1 : 1);
+        if (j < 0 || j >= cat.technologies.length) return;
+        [cat.technologies[i], cat.technologies[j]] = [cat.technologies[j], cat.technologies[i]];
+        render();
+    });
+    $(document).on("change", ".r-on", function () { $(this).closest("tr").toggleClass("off", !this.checked); });
+    $("#save").click(() => {
+        let err = collect();
+        if (err) { $("#msg").attr("class", "err").text(err); return; }
+        cat.note = "Edited " + new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC via the admin page.";
+        $.ajax({ url: "/admin/catalog", method: "POST", contentType: "application/json", data: JSON.stringify(cat), headers: headers() })
+            .done(() => { sessionStorage.setItem("plannerAdminPw", $("#pw").val()); $("#msg").attr("class", "ok").text("Saved. Maps pick it up on their next refresh; no restart or re-survey needed."); load(); })
+            .fail(x => $("#msg").attr("class", "err").text(
+                x.status === 401 ? "Not saved: wrong password." : x.status === 403 ? "Not saved: editing is switched off on this server." :
+                "Not saved: " + (x.responseText || ("error " + x.status))));
+    });
+});
+</script>
+</body>
+</html>

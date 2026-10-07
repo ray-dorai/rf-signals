@@ -44,13 +44,14 @@ pub fn signalmap_tile(
                     let mut path_as_distances: Vec<f64> =
                         los_path.iter().map(|d| *d as f64).collect();
                     path_as_distances[0] = base_tower_height;
-                    let mut terrain_path = PTPPath::new(
+                    let Ok(mut terrain_path) = PTPPath::new(
                         path_as_distances,
                         Distance::with_meters(t.height_meters),
                         Distance::with_meters(cpe_height),
                         Distance::with_meters(10.0),
-                    )
-                    .unwrap();
+                    ) else {
+                        return 400.0; // unusable profile: no coverage from this tower
+                    };
 
                     let lr = itwom_point_to_point(
                         &mut terrain_path,
@@ -64,7 +65,8 @@ pub fn signalmap_tile(
                     lr.dbloss
                 }
             })
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .filter(|v| v.is_finite())
+            .min_by(|a, b| a.total_cmp(b))
             .unwrap_or(400.0);
 
         let temporary_link_budget = link_budget - dbloss;
@@ -83,7 +85,7 @@ pub fn signalmap_tile(
     let mut w = Cursor::new(Vec::new());
     {
         let mut encoder = png::Encoder::new(&mut w, TILE_SIZE as _, TILE_SIZE as _);
-        encoder.set_color(png::ColorType::RGBA);
+        encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().unwrap();
         writer.write_image_data(&image_data).unwrap();
@@ -153,13 +155,14 @@ pub fn signalmap_detail(
                     let mut path_as_distances: Vec<f64> =
                         los_path.iter().map(|d| *d as f64).collect();
                     path_as_distances[0] = base_tower_height;
-                    let mut terrain_path = PTPPath::new(
+                    let Ok(mut terrain_path) = PTPPath::new(
                         path_as_distances,
                         Distance::with_meters(t.height_meters),
                         Distance::with_meters(cpe_height),
                         Distance::with_meters(10.0),
-                    )
-                    .unwrap();
+                    ) else {
+                        return 400.0; // unusable profile: no coverage from this tower
+                    };
 
                     let lr = itwom_point_to_point(
                         &mut terrain_path,
@@ -174,7 +177,8 @@ pub fn signalmap_detail(
                     lr.dbloss
                 }
             })
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
+            .filter(|v| v.is_finite())
+            .min_by(|a, b| a.total_cmp(b))
             .unwrap_or(400.0);
 
         //println!("picked {}", dbloss);
@@ -204,7 +208,7 @@ pub fn signalmap_detail(
     let mut w = Cursor::new(Vec::new());
     {
         let mut encoder = png::Encoder::new(&mut w, DETAIL_SIZE as _, DETAIL_SIZE as _);
-        encoder.set_color(png::ColorType::RGBA);
+        encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().unwrap();
         writer.write_image_data(&image_data).unwrap();

@@ -4,14 +4,16 @@ version = "0.1.0"
 authors = ["Herbert Wolverson <herberticus@gmail.com>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-rocket = "0.4.7"
-rocket_contrib = { version = "0.4.5", features = ["json"] }
+# Rocket 0.5 runs on stable Rust. 0.4 required a 2021-era nightly, which is a
+# toolchain you cannot install from this distribution's packages and which no
+# longer builds its own dependency tree reliably. Staying on it would have meant
+# pinning a five-year-old compiler to keep a coverage planner alive.
+rocket = { version = "0.5", features = ["json"] }
 rf-signal-algorithms = { path = "../rf-signal-algorithms/" }
-serde = "1.0.117"
-ron = "0.6.2"
-lazy_static = "1.4.0"
-parking_lot = "0.11.0"
-png = "0.16.7"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ron = "0.8"
+lazy_static = "1.4"
+parking_lot = "0.12"
+png = "0.17"

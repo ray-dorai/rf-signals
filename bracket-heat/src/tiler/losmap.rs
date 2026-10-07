@@ -56,7 +56,7 @@ pub fn losmap_tile(
     let mut w = Cursor::new(Vec::new());
     {
         let mut encoder = png::Encoder::new(&mut w, TILE_SIZE as _, TILE_SIZE as _);
-        encoder.set_color(png::ColorType::RGBA);
+        encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().unwrap();
         writer.write_image_data(&image_data).unwrap();
