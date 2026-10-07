@@ -13,6 +13,10 @@ const THIRD: f64 = 1.0 / 3.0;
 
 #[derive(Debug, Default)]
 pub(crate) struct ItWomState {
+    /// Receiver-side canopy height in metres above local ground; `None` keeps
+    /// the upstream 22.5 m preset. See `PTPPath::clutter_canopy_m`.
+    pub(crate) clutter_canopy_m: Option<f64>,
+
     // From lrprop2
     wlos: bool,
     wscat: bool,
@@ -88,11 +92,52 @@ pub(crate) struct ItWomState {
 
     ws: bool,
     w1: bool,
+
+    /// Every parameter-range check that raised `kwx`, with the offending value.
+    /// Recorded so callers can explain a warning rather than suppress it.
+    pub(crate) warnings: Vec<ItWomWarning>,
+    /// Derived inputs at the time the checks ran (refractivity, curvature,
+    /// effective heights, horizon angles).
+    pub(crate) derived: ItWomDerived,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ItWomWarning {
+    pub code: i32,
+    pub check: &'static str,
+    pub value: f64,
+    /// True where NTIA ITM v1.4 treats the condition as an error (no valid
+    /// result). False where NTIA only warns ("care must be taken"); the legacy
+    /// 1.2.2 `kwx` code can still be 4 for those, e.g. Ns < 250 or d < 1 km.
+    pub blocking: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ItWomDerived {
+    pub zsys_m: f64,
+    pub ens: f64,
+    pub gme: f64,
+    pub wn: f64,
+    pub dist_m: f64,
+    pub dmin_m: f64,
+    pub hg_m: [f64; 2],
+    pub he_m: [f64; 2],
+    pub the_rad: [f64; 2],
+    pub zgnd_re: f64,
+    pub zgnd_im: f64,
 }
 
 // Encalsulated in a struct to preserve state without using thread-unsafe
 // static muts.
 impl ItWomState {
+    fn warn(&mut self, prop: &mut PropType, code: i32, check: &'static str, value: f64, blocking: bool) {
+        prop.kwx = i32::max(prop.kwx, code);
+        let w = ItWomWarning { code, check, value, blocking };
+        if !self.warnings.contains(&w) {
+            self.warnings.push(w);
+        }
+    }
+
     pub(crate) fn point_to_point(
         &mut self,
         elev: &[f64],
@@ -146,8 +191,17 @@ impl ItWomState {
         /* PRESET VALUES for Basic Version w/o additional inputs active */
 
         prop.encc = 1000.00; /*  double enc_ncc_clcref preset  */
-        prop.cch = 22.5; /* double clutter_height preset to ILLR calibration.;
-                         use 25.3 for ITU-P1546-2 calibration */
+        /* Clutter canopy height. The upstream preset is a flat 22.5 m, which
+           makes `saalos` fire for every receiver below that -- i.e. every
+           subscriber -- regardless of whether the site is open rangeland or
+           closed cottonwood. Where the caller knows the local canopy from the
+           cooked LiDAR clutter layer, use it; otherwise keep the preset.
+           Guarded to stay positive: cch of 0 divides by zero in saalos. */
+        prop.cch = match self.clutter_canopy_m {
+            Some(m) if m.is_finite() && m > 0.1 => m,
+            Some(_) => 0.1,
+            None => 22.5, /* use 25.3 for ITU-P1546-2 calibration */
+        };
         prop.cd = 1.00; /* double clutter_density preset */
         let mode_var = 1; /* int mode_var set to 1 for FCC compatibility;
                           normally, SPLAT presets this to 12 */
@@ -162,6 +216,7 @@ impl ItWomState {
             }
 
             zsys /= (jb - ja + 1) as f64;
+            self.derived.zsys_m = zsys;
             q = eno;
         }
 
@@ -367,37 +422,46 @@ impl ItWomState {
             /*checking for parameters-in-range, error codes set if not */
 
             if prop.wn < 0.838 || prop.wn > 210.0 {
-                prop.kwx = i32::max(prop.kwx, 1);
+                self.warn(prop, 1, "frequency_outside_40MHz_10GHz", prop.wn * 47.7, false);
             }
 
             for j in 0..2 {
                 if prop.hg[j] < 1.0 || prop.hg[j] > 1000.0 {
-                    prop.kwx = i32::max(prop.kwx, 1);
+                    let check = if j == 0 { "tx_height_outside_1_1000m" } else { "rx_height_outside_1_1000m" };
+                    self.warn(prop, 1, check, prop.hg[j], false);
                 }
             }
 
             if (prop.the[0]).abs() > 200e-3 {
-                prop.kwx = i32::max(prop.kwx, 3);
+                self.warn(prop, 3, "tx_horizon_elevation_angle_over_200mrad", prop.the[0], false);
             }
 
             if (prop.the[1]).abs() > 1.220 {
-                prop.kwx = i32::max(prop.kwx, 3);
+                self.warn(prop, 3, "rx_horizon_elevation_angle_over_1220mrad", prop.the[1], false);
             }
 
-            if prop.ens < 250.0
-                || prop.ens > 400.0
-                || prop.gme < 75e-9
-                || prop.gme > 250e-9
-                || prop_zgnd.re <= prop_zgnd.im.abs()
-                || prop.wn < 0.419
-                || prop.wn > 420.0
-            {
-                prop.kwx = 4;
+            if prop.ens < 150.0 || prop.ens > 400.0 {
+                self.warn(prop, 4, "surface_refractivity_outside_150_400N", prop.ens, true);
+            } else if prop.ens < 250.0 {
+                // Legacy code 4; NTIA WARN__SURFACE_REFRACTIVITY. On test paths
+                // at 1.8-2.1 km elevation, forcing Ns to 250 moved NTIA ITM
+                // loss by <= 0.03 dB.
+                self.warn(prop, 4, "surface_refractivity_below_250N", prop.ens, false);
+            }
+            if prop.gme < 75e-9 || prop.gme > 250e-9 {
+                self.warn(prop, 4, "effective_earth_curvature_outside_75_250e-9", prop.gme, true);
+            }
+            if prop_zgnd.re <= prop_zgnd.im.abs() {
+                self.warn(prop, 4, "ground_impedance_re_not_above_abs_im", prop_zgnd.re, true);
+            }
+            if prop.wn < 0.419 || prop.wn > 420.0 {
+                self.warn(prop, 4, "frequency_outside_20MHz_20GHz", prop.wn * 47.7, true);
             }
 
             for j in 0..2 {
                 if prop.hg[j] < 0.5 || prop.hg[j] > 3000.0 {
-                    prop.kwx = 4;
+                    let check = if j == 0 { "tx_height_outside_0.5_3000m" } else { "rx_height_outside_0.5_3000m" };
+                    self.warn(prop, 4, check, prop.hg[j], true);
                 }
             }
 
@@ -421,16 +485,35 @@ impl ItWomState {
         if prop.dist > 0.0 {
             if prop.dist > 1000e3 {
                 /* prop.dist being in meters, if greater than 1000 km, kwx=1 */
-                prop.kwx = i32::max(prop.kwx, 1);
+                self.warn(prop, 1, "distance_over_1000km", prop.dist, false);
             }
 
             if prop.dist < self.dmin {
-                prop.kwx = i32::max(prop.kwx, 3);
+                /* dmin = |he0 - he1| / 200 mrad: path too steep for the model */
+                self.warn(prop, 3, "distance_below_steepness_minimum", prop.dist, false);
             }
 
-            if prop.dist < 1e3 || prop.dist > 2000e3 {
-                prop.kwx = 4;
+            // Legacy code 4 for both; NTIA only warns (PATH_DISTANCE_TOO_SMALL_2 /
+            // TOO_BIG_2). Short LOS paths matched NTIA and free space to 0.4 dB.
+            if prop.dist < 1e3 {
+                self.warn(prop, 4, "distance_under_1km", prop.dist, false);
             }
+            if prop.dist > 2000e3 {
+                self.warn(prop, 4, "distance_over_2000km", prop.dist, false);
+            }
+            self.derived = ItWomDerived {
+                zsys_m: self.derived.zsys_m,
+                ens: prop.ens,
+                gme: prop.gme,
+                wn: prop.wn,
+                dist_m: prop.dist,
+                dmin_m: self.dmin,
+                hg_m: prop.hg,
+                he_m: prop.he,
+                the_rad: prop.the,
+                zgnd_re: prop.zgndreal,
+                zgnd_im: prop.zgndimag,
+            };
         }
 
         if prop.dist < propa.dlsa {
@@ -1002,7 +1085,7 @@ impl ItWomState {
                 if propv.klim <= 0 || propv.klim > 7 {
                     propv.klim = 5;
                     temp_klim = 4;
-                    prop.kwx = i32::max(prop.kwx, 2);
+                    self.warn(prop, 2, "radio_climate_invalid_defaulted", propv.klim as f64, true);
                 }
 
                 self.cv1 = bv1[temp_klim as usize];
@@ -1048,8 +1131,9 @@ impl ItWomState {
                     }
 
                     if self.kdv < 0 || self.kdv > 3 {
+                        let invalid = self.kdv as f64;
                         self.kdv = 0;
-                        prop.kwx = i32::max(prop.kwx, 2);
+                        self.warn(prop, 2, "variability_mode_invalid_defaulted", invalid, true);
                     }
                 }
 
@@ -1131,7 +1215,7 @@ impl ItWomState {
         }
 
         if fabs(zt) > 3.1 || fabs(zl) > 3.1 || fabs(zc) > 3.1 {
-            prop.kwx = i32::max(prop.kwx, 1);
+            self.warn(prop, 1, "variability_deviate_over_3.1", fabs(zt).max(fabs(zl)).max(fabs(zc)), false);
         }
 
         if zt < 0.0 {

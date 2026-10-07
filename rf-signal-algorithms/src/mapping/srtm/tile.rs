@@ -42,6 +42,17 @@ impl SrtmTile {
         None
     }
 
+    /// Byte length a well-formed tile of this kind must have.
+    /// Srtm1 and SrtmThird are 1201x1201 samples, Srtm3 is 3601x3601; all are
+    /// 16-bit. Anything shorter is a truncated or partial download.
+    pub fn expected_bytes(&self) -> usize {
+        match self {
+            SrtmTile::Srtm1 { .. } => 1201 * 1201 * 2,
+            SrtmTile::Srtm3 { .. } => 3601 * 3601 * 2,
+            SrtmTile::SrtmThird { .. } => 1201 * 1201 * 2,
+        }
+    }
+
     /// Calculates an SRTM filename based on an SrtmTile entry.
     /// terrain_path denotes a directory prefix to attach.
     pub fn filename(&self, terrain_path: &str) -> String {

@@ -1,8 +1,11 @@
 mod itwom3;
 pub use itwom3::{
-    itwom_point_to_point, GroundConductivity, PTPClimate, PTPPath, PTPResult, RadioClimate,
+    itwom_point_to_point, GroundConductivity, ItWomDerived, ItWomWarning, PTPClimate, PTPPath,
+    PTPResult, RadioClimate,
 };
 mod fspl;
+mod mmwave;
+pub use mmwave::{vband_gas_db_per_km, vband_rain_fade_db, vband_supported};
 mod itwom3_port;
 pub use fspl::free_space_path_loss_db;
 mod fresnel;

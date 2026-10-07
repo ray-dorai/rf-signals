@@ -1,5 +1,6 @@
 pub mod latlon;
 pub mod srtm;
+pub mod terrain_config;
 pub use latlon::LatLon;
 pub mod bheat;
 use bheat::heat_altitude;
@@ -19,23 +20,45 @@ pub fn lat_lon_tile(
     nelon: f64,
     tile_size: usize,
 ) -> Vec<(u32, u32, LatLon)> {
-    let mut points = Vec::with_capacity(tile_size * tile_size);
-    let mut lat = swlat;
+    // Counted loops, not `while lon < nelon`. Accumulating a float step could
+    // emit a tile_size+1'th column, and every caller uses the returned x and y
+    // to index a fixed tile_size x tile_size image -- so the overrun panicked
+    // the worker thread and the tile came back as a 200 with an empty body.
     let lat_step = (nelat - swlat) / tile_size as f64;
     let lon_step = (nelon - swlon) / tile_size as f64;
-    let mut y = 0;
-    while lat < nelat - lat_step {
-        let mut lon = swlon;
-        let mut x = 0;
-        while lon < nelon {
-            points.push((x, y, LatLon::new(lat, lon)));
-            lon += lon_step;
-            x += 1;
+    let mut points = Vec::with_capacity(tile_size * tile_size);
+    for y in 0..tile_size {
+        let lat = swlat + (lat_step * y as f64);
+        for x in 0..tile_size {
+            points.push((x as u32, y as u32, LatLon::new(lat, swlon + (lon_step * x as f64))));
         }
-        lat += lat_step;
-        y += 1;
     }
     points
+}
+
+#[cfg(test)]
+mod tile_tests {
+    use super::lat_lon_tile;
+
+    #[test]
+    fn tile_is_exactly_square_and_in_range() {
+        for size in [16usize, 256, 512] {
+            let pts = lat_lon_tile(39.39, -95.61, 39.41, -95.58, size);
+            assert_eq!(pts.len(), size * size, "wrong point count for {}", size);
+            assert!(pts.iter().all(|(x, y, _)| (*x as usize) < size && (*y as usize) < size));
+        }
+    }
+
+    #[test]
+    fn tile_spans_the_requested_box() {
+        let pts = lat_lon_tile(39.0, -95.0, 39.5, -94.5, 8);
+        let lats: Vec<f64> = pts.iter().map(|(_, _, p)| p.lat()).collect();
+        let lons: Vec<f64> = pts.iter().map(|(_, _, p)| p.lon()).collect();
+        assert!(lats.iter().cloned().fold(f64::MAX, f64::min) >= 39.0);
+        assert!(lats.iter().cloned().fold(f64::MIN, f64::max) < 39.5);
+        assert!(lons.iter().cloned().fold(f64::MAX, f64::min) >= -95.0);
+        assert!(lons.iter().cloned().fold(f64::MIN, f64::max) < -94.5);
+    }
 }
 
 fn highest_altitude(point: &LatLon, heat_path: &str) -> f64 {
@@ -84,6 +107,26 @@ pub fn lat_lon_vec_to_heights(points: &[LatLon], heat_path: &str) -> Vec<f64> {
     points
         .par_iter()
         .map(|point| highest_altitude(point, heat_path))
+        .collect()
+}
+
+/// Bare ground and canopy-top altitude at every point on a path, kept apart.
+///
+/// `lat_lon_vec_to_heights` collapses the two with `max`, which hands ITWOM a
+/// tree crown as though it were a hill. Diffraction geometry wants bare earth;
+/// vegetation is an attenuation, not a knife edge. Callers that model foliage
+/// properly need both series, so this returns `(ground, canopy_top)` per point,
+/// both as absolute altitudes in metres.
+pub fn lat_lon_vec_to_ground_clutter(points: &[LatLon], heat_path: &str) -> Vec<(f64, f64)> {
+    points
+        .par_iter()
+        .map(|point| {
+            let a = heat_altitude(point.lat(), point.lon(), heat_path)
+                .unwrap_or((Distance::with_meters(0.0), Distance::with_meters(0.0)));
+            let ground = a.0.as_meters();
+            let canopy = a.1.as_meters();
+            (ground, f64::max(ground, canopy))
+        })
         .collect()
 }
 

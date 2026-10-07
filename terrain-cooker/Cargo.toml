@@ -4,12 +4,11 @@ version = "0.1.0"
 authors = ["herbert"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-las = "0.7"
-proj = "0.22"
-geo-types = "0.7"
+# laz feature: 3DEP ships .laz, and the old code silently skipped anything whose
+# extension was not exactly "las" (and panicked on extensionless files).
+las = { version = "0.7", features = ["laz"] }
 bytemuck = "1.4"
-image = "0.23"
+image = "0.24"
+rayon = "1.5"
 rf-signal-algorithms = { path = "../rf-signal-algorithms" }
