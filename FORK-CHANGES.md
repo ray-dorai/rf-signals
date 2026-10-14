@@ -106,7 +106,8 @@ technology list is a built-in set of bands and there are no packages.
 ## Address layer
 
 `<resources>/address-layer-v2.json` holds one row per address with every AP the survey offered
-there. Build it by calling `/mapclick` for each address point and writing:
+there. `tools/address_survey.py` builds it from parcel and building-footprint files. To build it
+another way, call `/mapclick` for each address point and write:
 
 ```json
 { "meta": { "version": 2, "cpe_height_m": 4, "generated": "2026-01-01",
@@ -118,3 +119,10 @@ there. Build it by calling `/mapclick` for each address point and writing:
 Row: lat, lon, address, id, on-building flag, links. Link: index into `meta.aps`, grade
 (0 clear, 1 check_mount, 2 unverified, 3 obstructed), RSSI, mount height (m), distance (km). The
 file is re-read when it changes; no restart is needed.
+
+## Tools and notes
+
+* [`tools/`](tools/README.md): cook USGS 3DEP LAZ tiles into a new `.bheat` store, merge a newer
+  flight into an existing store, and build the address layer.
+* [`docs/snmp-ap-transmit-oids.md`](docs/snmp-ap-transmit-oids.md): SNMP objects for real AP
+  transmit power and EIRP on Cambium PMP 450, Ubiquiti LTU and Wave, for use in link budgets.
